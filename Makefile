@@ -3,14 +3,14 @@
 PREFIX := /usr/local/src/munin-php-opcache
 
 install:
-	sudo ./install.sh
+	sudo bash install.sh
 
 uninstall:
-	sudo ./uninstall.sh
+	sudo bash uninstall.sh
 
 update:
 	git pull origin main
-	sudo ./install.sh
+	sudo bash install.sh
 
 test:
 	@echo "Testing plugin..."
