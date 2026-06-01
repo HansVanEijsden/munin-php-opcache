@@ -1,11 +1,14 @@
 #!/bin/bash
 # Munin plugin voor PHP OPcache stats - per container
-# Versie: 1.0.0
+# Versie: 1.0.1
 
 PLUGIN_NAME="${0##*/}"
 CONTAINER="${PLUGIN_NAME#php_opcache_}"
-CONTAINER="${CONTAINER//_/-}"
+CONTAINER="${CONTAINER//_/-}"  # Zet underscores terug naar streepjes
 SOCKET="/run/php/${CONTAINER}.sock"
+
+# Veilige naam voor Munin (streepjes -> underscores)
+SAFE_NAME="${CONTAINER//-/_}"
 
 get_opcache_stats() {
     SCRIPT_NAME=/tmp/opcache-status.php \
@@ -132,17 +135,17 @@ fi
 
 case "$1" in
     config)
-        echo "multigraph php_opcache_memory_${CONTAINER}"
+        echo "multigraph php_opcache_memory_${SAFE_NAME}"
         do_memory_config
         echo
-        echo "multigraph php_opcache_keys_${CONTAINER}"
+        echo "multigraph php_opcache_keys_${SAFE_NAME}"
         do_keys_config
         ;;
     *)
-        echo "multigraph php_opcache_memory_${CONTAINER}"
+        echo "multigraph php_opcache_memory_${SAFE_NAME}"
         do_memory_values
         echo
-        echo "multigraph php_opcache_keys_${CONTAINER}"
+        echo "multigraph php_opcache_keys_${SAFE_NAME}"
         do_keys_values
         ;;
 esac
