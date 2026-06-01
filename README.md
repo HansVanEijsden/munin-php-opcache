@@ -12,6 +12,16 @@ Monitor OPcache statistics per PHP Docker container.
 
 ```bash
 cd /usr/local/src
-sudo git clone https://github.com/YOUR_USERNAME/munin-php-opcache.git
+sudo git clone https://github.com/hansvaneijsden/munin-php-opcache.git
 cd munin-php-opcache
 sudo ./install.sh
+
+## Note:
+
+This package relies on the `docker` command being available to the user running the Munin plugins (usually `munin`). Ensure that the `munin` user has permission to execute Docker commands, which may involve adding it to the `docker` group:
+
+```bash
+sudo usermod -aG docker munin
+```
+
+Must be used with my custom PHP Docker image that exposes OPcache stats via a simple HTTP endpoint. See https://github.com/HansVanEijsden/php-wordpress-base
