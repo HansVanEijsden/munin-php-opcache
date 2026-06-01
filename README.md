@@ -15,8 +15,9 @@ cd /usr/local/src
 sudo git clone https://github.com/hansvaneijsden/munin-php-opcache.git
 cd munin-php-opcache
 sudo ./install.sh
+```
 
-## Note:
+## Note
 
 This package relies on the `docker` command being available to the user running the Munin plugins (usually `munin`). Ensure that the `munin` user has permission to execute Docker commands, which may involve adding it to the `docker` group:
 
