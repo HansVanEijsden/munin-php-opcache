@@ -1,0 +1,148 @@
+#!/bin/bash
+# Munin plugin voor PHP OPcache stats - per container
+# Versie: 1.0.0
+
+PLUGIN_NAME="${0##*/}"
+CONTAINER="${PLUGIN_NAME#php_opcache_}"
+CONTAINER="${CONTAINER//_/-}"
+SOCKET="/run/php/${CONTAINER}.sock"
+
+get_opcache_stats() {
+    SCRIPT_NAME=/tmp/opcache-status.php \
+    SCRIPT_FILENAME=/tmp/opcache-status.php \
+    REQUEST_METHOD=GET \
+    cgi-fcgi -bind -connect "$SOCKET" 2>&1 | tail -1
+}
+
+do_memory_config() {
+    cat <<EOF
+graph_title PHP OPcache memory usage - ${CONTAINER}
+graph_args --base 1024 -l 0
+graph_vlabel bytes
+graph_category php
+graph_info OPcache memory usage for ${CONTAINER}
+
+used.label Used memory
+used.type GAUGE
+used.min 0
+used.draw AREA
+
+free.label Free memory
+free.type GAUGE
+free.min 0
+free.draw STACK
+free.warning 10:100
+free.critical 5:100
+
+wasted.label Wasted memory
+wasted.type GAUGE
+wasted.min 0
+wasted.draw STACK
+wasted.warning 10:100
+wasted.critical 50:100
+
+total.label Total memory
+total.type GAUGE
+total.min 0
+total.draw LINE2
+EOF
+}
+
+do_keys_config() {
+    local max_keys=$(get_opcache_stats | php -r '
+        $data = json_decode(file_get_contents("php://stdin"), true);
+        echo $data["opcache_statistics"]["max_cached_keys"] ?? 16229;
+    ')
+    
+    cat <<EOF
+graph_title PHP OPcache keys usage - ${CONTAINER}
+graph_args -l 0
+graph_vlabel keys
+graph_category php
+graph_info OPcache keys usage for ${CONTAINER}
+
+cached.label Cached keys
+cached.type GAUGE
+cached.min 0
+cached.draw AREA
+
+max.label Max keys
+max.type GAUGE
+max.min 0
+max.draw LINE2
+
+free.label Free slots
+free.type GAUGE
+free.min 0
+free.draw STACK
+free.warning 10:100
+free.critical 5:100
+EOF
+}
+
+do_memory_values() {
+    local json=$(get_opcache_stats)
+    
+    echo "$json" | php -r '
+        $data = json_decode(file_get_contents("php://stdin"), true);
+        if (!$data || !isset($data["memory_usage"])) {
+            echo "used.value U\nfree.value U\nwasted.value U\ntotal.value U\n";
+            exit(1);
+        }
+        $mu = $data["memory_usage"];
+        $total = $mu["used_memory"] + $mu["free_memory"] + $mu["wasted_memory"];
+        
+        echo "used.value " . ($mu["used_memory"] ?? 0) . "\n";
+        echo "free.value " . ($mu["free_memory"] ?? 0) . "\n";
+        echo "wasted.value " . ($mu["wasted_memory"] ?? 0) . "\n";
+        echo "total.value " . $total . "\n";
+    '
+}
+
+do_keys_values() {
+    local json=$(get_opcache_stats)
+    
+    echo "$json" | php -r '
+        $data = json_decode(file_get_contents("php://stdin"), true);
+        if (!$data || !isset($data["opcache_statistics"])) {
+            echo "cached.value U\nmax.value U\nfree.value U\n";
+            exit(1);
+        }
+        $os = $data["opcache_statistics"];
+        $max = $os["max_cached_keys"] ?? 16229;
+        $cached = $os["num_cached_keys"] ?? 0;
+        $free = $max - $cached;
+        
+        echo "cached.value " . $cached . "\n";
+        echo "max.value " . $max . "\n";
+        echo "free.value " . $free . "\n";
+    '
+}
+
+# Main logic
+if ! docker ps --format "{{.Names}}" | grep -qx "$CONTAINER"; then
+    echo "Container $CONTAINER not found" >&2
+    exit 1
+fi
+
+if [ ! -S "$SOCKET" ]; then
+    echo "Socket $SOCKET not found" >&2
+    exit 1
+fi
+
+case "$1" in
+    config)
+        echo "multigraph php_opcache_memory_${CONTAINER}"
+        do_memory_config
+        echo
+        echo "multigraph php_opcache_keys_${CONTAINER}"
+        do_keys_config
+        ;;
+    *)
+        echo "multigraph php_opcache_memory_${CONTAINER}"
+        do_memory_values
+        echo
+        echo "multigraph php_opcache_keys_${CONTAINER}"
+        do_keys_values
+        ;;
+esac
