@@ -27,6 +27,12 @@ if ! command -v cgi-fcgi >/dev/null 2>&1; then
     exit 1
 fi
 
+# Optional: check jq (not required, but nice to have)
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Warning: jq not found. Will use grep/sed fallback for JSON parsing."
+    echo "Install jq for better performance: apt-get install jq"
+fi
+
 # Copy plugin to Munin directory
 cp "$PLUGIN_SOURCE" "$MUNIN_PLUGIN_DIR/"
 chmod +x "${MUNIN_PLUGIN_DIR}/php_opcache_"
@@ -47,9 +53,13 @@ fi
 # Restart munin-node
 systemctl restart munin-node
 
+echo ""
 echo "Installation complete!"
 echo ""
 echo "Test with:"
 for container in $(docker ps --format "{{.Names}}" | grep -E 'php$'); do
-    echo "  munin-run php_opcache_${container} config"
+    echo "  munin-run php_opcache_${container} config | head -5"
 done
+echo ""
+echo "Note: Install jq for better JSON parsing performance:"
+echo "  apt-get install jq"

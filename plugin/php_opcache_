@@ -1,6 +1,6 @@
 #!/bin/bash
 # Munin plugin voor PHP OPcache stats - per container
-# Versie: 1.0.2
+# Versie: 1.0.3 - Geen PHP CLI nodig
 
 PLUGIN_NAME="${0##*/}"
 CONTAINER="${PLUGIN_NAME#php_opcache_}"
@@ -17,18 +17,48 @@ get_opcache_stats() {
     cgi-fcgi -bind -connect "$SOCKET" 2>&1 | tail -1
 }
 
+# Helper functie voor JSON parsing
+parse_json() {
+    local json="$1"
+    local key="$2"
+    
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r "$key // 0"
+    else
+        # Fallback naar grep/sed
+        local value=$(echo "$json" | grep -o "\"${key}\":[0-9]*" | head -1 | cut -d':' -f2)
+        echo "${value:-0}"
+    fi
+}
+
+# Helper functie voor nested JSON parsing
+parse_nested_json() {
+    local json="$1"
+    local parent="$2"
+    local child="$3"
+    
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r ".${parent}.${child} // 0"
+    else
+        # Fallback naar grep/sed voor nested values
+        local value=$(echo "$json" | grep -o "\"${child}\":[0-9]*" | head -1 | cut -d':' -f2)
+        echo "${value:-0}"
+    fi
+}
+
 do_memory_config() {
-    # Haal total memory op voor percentage berekeningen
     local json=$(get_opcache_stats)
-    local total_memory=$(echo "$json" | php -r '
-        $data = json_decode(file_get_contents("php://stdin"), true);
-        if ($data && isset($data["memory_usage"])) {
-            $mu = $data["memory_usage"];
-            echo $mu["used_memory"] + $mu["free_memory"] + $mu["wasted_memory"];
-        } else {
-            echo "268435456";  # Default 256MB
-        }
-    ')
+    
+    # Bereken total memory
+    local used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
+    local free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
+    local wasted_mem=$(parse_nested_json "$json" "memory_usage" "wasted_memory")
+    local total_memory=$((used_mem + free_mem + wasted_mem))
+    
+    # Gebruik total memory of default 256MB
+    if [ "$total_memory" -eq 0 ]; then
+        total_memory=268435456
+    fi
     
     # Bereken thresholds in bytes (10MB = 10485760, 5MB = 5242880)
     local warn_bytes=10485760   # 10MB
@@ -80,10 +110,12 @@ EOF
 
 do_keys_config() {
     local json=$(get_opcache_stats)
-    local max_keys=$(echo "$json" | php -r '
-        $data = json_decode(file_get_contents("php://stdin"), true);
-        echo $data["opcache_statistics"]["max_cached_keys"] ?? 16229;
-    ')
+    local max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
+    
+    # Default waarde als niet gevonden
+    if [ "$max_keys" -eq 0 ]; then
+        max_keys=16229
+    fi
     
     cat <<EOF
 graph_title PHP OPcache keys usage - ${CONTAINER}
@@ -119,40 +151,31 @@ EOF
 do_memory_values() {
     local json=$(get_opcache_stats)
     
-    echo "$json" | php -r '
-        $data = json_decode(file_get_contents("php://stdin"), true);
-        if (!$data || !isset($data["memory_usage"])) {
-            echo "used.value U\nfree.value U\nwasted.value U\ntotal.value U\n";
-            exit(1);
-        }
-        $mu = $data["memory_usage"];
-        $total = $mu["used_memory"] + $mu["free_memory"] + $mu["wasted_memory"];
-        
-        echo "used.value " . ($mu["used_memory"] ?? 0) . "\n";
-        echo "free.value " . ($mu["free_memory"] ?? 0) . "\n";
-        echo "wasted.value " . ($mu["wasted_memory"] ?? 0) . "\n";
-        echo "total.value " . $total . "\n";
-    '
+    local used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
+    local free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
+    local wasted_mem=$(parse_nested_json "$json" "memory_usage" "wasted_memory")
+    local total_mem=$((used_mem + free_mem + wasted_mem))
+    
+    echo "used.value ${used_mem}"
+    echo "free.value ${free_mem}"
+    echo "wasted.value ${wasted_mem}"
+    echo "total.value ${total_mem}"
 }
 
 do_keys_values() {
     local json=$(get_opcache_stats)
     
-    echo "$json" | php -r '
-        $data = json_decode(file_get_contents("php://stdin"), true);
-        if (!$data || !isset($data["opcache_statistics"])) {
-            echo "cached.value U\nfree.value U\nmax.value U\n";
-            exit(1);
-        }
-        $os = $data["opcache_statistics"];
-        $max = $os["max_cached_keys"] ?? 16229;
-        $cached = $os["num_cached_keys"] ?? 0;
-        $free = $max - $cached;
-        
-        echo "cached.value " . $cached . "\n";
-        echo "free.value " . $free . "\n";
-        echo "max.value " . $max . "\n";
-    '
+    local max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
+    local cached_keys=$(parse_nested_json "$json" "opcache_statistics" "num_cached_keys")
+    
+    # Default waarden als niet gevonden
+    [ "$max_keys" -eq 0 ] && max_keys=16229
+    
+    local free_keys=$((max_keys - cached_keys))
+    
+    echo "cached.value ${cached_keys}"
+    echo "free.value ${free_keys}"
+    echo "max.value ${max_keys}"
 }
 
 # Main logic
