@@ -1,6 +1,6 @@
 #!/bin/bash
 # Munin plugin voor PHP OPcache stats - per container
-# Versie: 1.0.1
+# Versie: 1.0.2
 
 PLUGIN_NAME="${0##*/}"
 CONTAINER="${PLUGIN_NAME#php_opcache_}"
@@ -18,68 +18,109 @@ get_opcache_stats() {
 }
 
 do_memory_config() {
+    # Haal total memory op voor percentage berekeningen
+    local json=$(get_opcache_stats)
+    local total_memory=$(echo "$json" | php -r '
+        $data = json_decode(file_get_contents("php://stdin"), true);
+        if ($data && isset($data["memory_usage"])) {
+            $mu = $data["memory_usage"];
+            echo $mu["used_memory"] + $mu["free_memory"] + $mu["wasted_memory"];
+        } else {
+            echo "268435456";  # Default 256MB
+        }
+    ')
+    
+    # Bereken thresholds in bytes (10MB = 10485760, 5MB = 5242880)
+    local warn_bytes=10485760   # 10MB
+    local crit_bytes=5242880    # 5MB
+    local warn_wasted=10485760  # 10MB
+    local crit_wasted=52428800  # 50MB
+    
     cat <<EOF
 graph_title PHP OPcache memory usage - ${CONTAINER}
 graph_args --base 1024 -l 0
 graph_vlabel bytes
-graph_category php
+graph_category php_opcache
 graph_info OPcache memory usage for ${CONTAINER}
+graph_order used free wasted total
 
 used.label Used memory
 used.type GAUGE
 used.min 0
 used.draw AREA
+used.colour 44AD4E
+used.info Currently used OPcache memory
 
 free.label Free memory
 free.type GAUGE
 free.min 0
 free.draw STACK
-free.warning 10:100
-free.critical 5:100
+free.colour 6BAED6
+free.warning ${warn_bytes}:
+free.critical ${crit_bytes}:
+free.info Available OPcache memory (warning if below 10MB, critical if below 5MB)
 
 wasted.label Wasted memory
 wasted.type GAUGE
 wasted.min 0
 wasted.draw STACK
-wasted.warning 10:100
-wasted.critical 50:100
+wasted.colour DD4B39
+wasted.warning :${warn_wasted}
+wasted.critical :${crit_wasted}
+wasted.info Memory wasted due to fragmentation (warning if above 10MB, critical if above 50MB)
 
 total.label Total memory
 total.type GAUGE
 total.min 0
 total.draw LINE2
+total.colour 999999
+total.info Total OPcache memory available
 EOF
 }
 
 do_keys_config() {
-    local max_keys=$(get_opcache_stats | php -r '
+    local json=$(get_opcache_stats)
+    local max_keys=$(echo "$json" | php -r '
         $data = json_decode(file_get_contents("php://stdin"), true);
         echo $data["opcache_statistics"]["max_cached_keys"] ?? 16229;
     ')
+    
+    # Bereken thresholds als percentages van max_keys
+    local warn_percent=10
+    local crit_percent=5
+    local warn_free=$((max_keys * warn_percent / 100))
+    local crit_free=$((max_keys * crit_percent / 100))
     
     cat <<EOF
 graph_title PHP OPcache keys usage - ${CONTAINER}
 graph_args -l 0
 graph_vlabel keys
-graph_category php
+graph_category php_opcache
 graph_info OPcache keys usage for ${CONTAINER}
+graph_order cached max free
 
 cached.label Cached keys
 cached.type GAUGE
 cached.min 0
 cached.draw AREA
+cached.colour 44AD4E
+cached.info Number of currently cached keys
 
 max.label Max keys
 max.type GAUGE
 max.min 0
 max.draw LINE2
+max.colour 999999
+max.info Maximum number of keys allowed (opcache.max_accelerated_files)
 
 free.label Free slots
 free.type GAUGE
 free.min 0
 free.draw STACK
-free.warning 10:100
-free.critical 5:100
+free.colour 6BAED6
+free.warning ${warn_free}:
+free.critical ${crit_free}:
+free.info Available key slots (warning if below ${warn_percent}%, critical if below ${crit_percent}%)
 EOF
 }
 
