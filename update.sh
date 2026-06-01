@@ -13,6 +13,6 @@ cd "$SCRIPT_DIR"
 git pull origin main
 
 # Reinstall
-sudo ./install.sh
+sudo bash install.sh
 
 echo "Update complete!"
