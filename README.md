@@ -25,4 +25,4 @@ This package relies on the `docker` command being available to the user running 
 sudo usermod -aG docker munin
 ```
 
-Must be used with my custom PHP Docker image that exposes OPcache stats via a simple HTTP endpoint. See https://github.com/HansVanEijsden/php-wordpress-base
+Must be used with my custom PHP Docker image that exposes OPcache stats via a simple FastCGI endpoint. Only for custom installations. See https://github.com/HansVanEijsden/php-wordpress-base
