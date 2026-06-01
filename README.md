@@ -14,7 +14,7 @@ Monitor OPcache statistics per PHP Docker container.
 cd /usr/local/src
 sudo git clone https://github.com/hansvaneijsden/munin-php-opcache.git
 cd munin-php-opcache
-sudo ./install.sh
+sudo chmod +x install.sh && sudo ./install.sh
 ```
 
 ## Note
