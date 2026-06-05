@@ -1,6 +1,6 @@
 #!/bin/bash
 # Munin plugin voor PHP OPcache stats - per container
-# Versie: 1.0.3 - Geen PHP CLI nodig
+# Versie: 1.1.0 - Met interned strings monitoring
 
 PLUGIN_NAME="${0##*/}"
 CONTAINER="${PLUGIN_NAME#php_opcache_}"
@@ -148,6 +148,52 @@ max.info Maximum number of keys allowed (opcache.max_accelerated_files)
 EOF
 }
 
+do_interned_strings_config() {
+    local json=$(get_opcache_stats)
+    local buffer_size=$(parse_nested_json "$json" "interned_strings_usage" "buffer_size")
+    
+    # Default waarde als niet gevonden (32MB)
+    if [ "$buffer_size" -eq 0 ]; then
+        buffer_size=33554432
+    fi
+    
+    # Bereken thresholds in bytes (10% en 5% van buffer_size)
+    local warn_bytes=$((buffer_size * 10 / 100))
+    local crit_bytes=$((buffer_size * 5 / 100))
+    
+    cat <<EOF
+graph_title PHP OPcache interned strings - ${CONTAINER}
+graph_args --base 1024 -l 0
+graph_vlabel bytes
+graph_category php-opcache
+graph_info OPcache interned strings buffer for ${CONTAINER}. Shows when buffer is nearly full.
+graph_order used free total
+
+used.label Used memory
+used.type GAUGE
+used.min 0
+used.draw AREA
+used.colour 44AD4E
+used.info Currently used interned strings memory
+
+free.label Free memory
+free.type GAUGE
+free.min 0
+free.draw STACK
+free.colour 6BAED6
+free.warning ${warn_bytes}:
+free.critical ${crit_bytes}:
+free.info Available interned strings memory (warning if below 10%, critical if below 5%)
+
+total.label Total buffer size
+total.type GAUGE
+total.min 0
+total.draw LINE2
+total.colour 999999
+total.info Total interned strings buffer size (opcache.interned_strings_buffer)
+EOF
+}
+
 do_memory_values() {
     local json=$(get_opcache_stats)
     
@@ -178,6 +224,28 @@ do_keys_values() {
     echo "max.value ${max_keys}"
 }
 
+do_interned_strings_values() {
+    local json=$(get_opcache_stats)
+    
+    local buffer_size=$(parse_nested_json "$json" "interned_strings_usage" "buffer_size")
+    local used_mem=$(parse_nested_json "$json" "interned_strings_usage" "used_memory")
+    local free_mem=$(parse_nested_json "$json" "interned_strings_usage" "free_memory")
+    
+    # Als buffer_size 0 is, gebruik dan default 32MB
+    if [ "$buffer_size" -eq 0 ]; then
+        buffer_size=33554432
+        # Als we geen data hebben, probeer dan used+free te gebruiken
+        if [ "$used_mem" -eq 0 ] && [ "$free_mem" -eq 0 ]; then
+            used_mem=0
+            free_mem=$buffer_size
+        fi
+    fi
+    
+    echo "used.value ${used_mem}"
+    echo "free.value ${free_mem}"
+    echo "total.value ${buffer_size}"
+}
+
 # Main logic
 if ! docker ps --format "{{.Names}}" | grep -qx "$CONTAINER"; then
     echo "Container $CONTAINER not found" >&2
@@ -196,6 +264,9 @@ case "$1" in
         echo
         echo "multigraph php_opcache_keys_${SAFE_NAME}"
         do_keys_config
+        echo
+        echo "multigraph php_opcache_interned_strings_${SAFE_NAME}"
+        do_interned_strings_config
         ;;
     *)
         echo "multigraph php_opcache_memory_${SAFE_NAME}"
@@ -203,5 +274,8 @@ case "$1" in
         echo
         echo "multigraph php_opcache_keys_${SAFE_NAME}"
         do_keys_values
+        echo
+        echo "multigraph php_opcache_interned_strings_${SAFE_NAME}"
+        do_interned_strings_values
         ;;
 esac
