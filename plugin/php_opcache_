@@ -1,6 +1,6 @@
 #!/bin/bash
 # Munin plugin voor PHP OPcache stats - per container
-# Versie: 1.1.0 - Met interned strings monitoring
+# Versie: 1.2.0 - Aangepaste warnings: used_perc warning=95%, critical=98%
 
 PLUGIN_NAME="${0##*/}"
 CONTAINER="${PLUGIN_NAME#php_opcache_}"
@@ -49,7 +49,7 @@ parse_nested_json() {
 do_memory_config() {
     local json=$(get_opcache_stats)
     
-    # Bereken total memory (voor de weergave)
+    # Bereken total memory
     local used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
     local free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
     local wasted_mem=$(parse_nested_json "$json" "memory_usage" "wasted_memory")
@@ -59,13 +59,21 @@ do_memory_config() {
         total_memory=268435456
     fi
     
+    # Bereken thresholds voor echte problemen
+    local free_critical=$((total_memory * 1 / 100))  # 1% van total is echt kritiek
+    local wasted_critical=30  # 30% is onhoudbaar
+    
+    # Jouw gewenste warnings voor used percentage
+    local used_warning=95
+    local used_critical=98
+    
     cat <<EOF
 graph_title PHP OPcache memory usage - ${CONTAINER}
 graph_args --base 1024 -l 0
 graph_vlabel bytes
 graph_category php-opcache
 graph_info OPcache memory usage for ${CONTAINER}
-graph_order used free wasted total
+graph_order used free wasted total used_perc wasted_perc
 
 used.label Used memory
 used.type GAUGE
@@ -79,14 +87,15 @@ free.type GAUGE
 free.min 0
 free.draw STACK
 free.colour 6BAED6
-free.info Available OPcache memory (does not include wasted)
+free.critical ${free_critical}:
+free.info Available OPcache memory (CRITICAL if below 1% of total)
 
 wasted.label Wasted memory
 wasted.type GAUGE
 wasted.min 0
 wasted.draw STACK
 wasted.colour DD4B39
-wasted.info Memory from outdated scripts (will be reclaimed automatically when needed)
+wasted.info Memory from outdated scripts (reclaimed automatically when needed)
 
 total.label Total memory
 total.type GAUGE
@@ -95,14 +104,60 @@ total.draw LINE2
 total.colour 999999
 total.info Total OPcache memory available
 
-# Dit is de crux - de echte health indicator
+used_perc.label Used percentage
+used_perc.type GAUGE
+used_perc.min 0
+used_perc.max 100
+used_perc.warning ${used_warning}
+used_perc.critical ${used_critical}
+used_perc.info Percentage of total memory used (WARNING if >${used_warning}%%, CRITICAL if >${used_critical}%%)
+
 wasted_perc.label Wasted percentage
 wasted_perc.type GAUGE
 wasted_perc.min 0
 wasted_perc.max 100
-wasted_perc.warning 5
-wasted_perc.critical 10
-wasted_perc.info Wasted memory as percentage of total (restarts when above opcache.max_wasted_percentage, default 5)
+wasted_perc.critical ${wasted_critical}
+wasted_perc.info Wasted memory as percentage (CRITICAL only if >${wasted_critical}%% - manual intervention needed)
+EOF
+}
+
+do_keys_config() {
+    local json=$(get_opcache_stats)
+    local max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
+    
+    # Default waarde als niet gevonden
+    if [ "$max_keys" -eq 0 ]; then
+        max_keys=16229
+    fi
+    
+    cat <<EOF
+graph_title PHP OPcache keys usage - ${CONTAINER}
+graph_args -l 0
+graph_vlabel keys
+graph_category php-opcache
+graph_info OPcache keys usage for ${CONTAINER}
+graph_order cached free max
+
+cached.label Cached keys
+cached.type GAUGE
+cached.min 0
+cached.draw AREA
+cached.colour 44AD4E
+cached.info Number of currently cached keys
+
+free.label Free slots
+free.type GAUGE
+free.min 0
+free.draw STACK
+free.colour 6BAED6
+free.info Available key slots (max - cached)
+
+max.label Max keys (total)
+max.type GAUGE
+max.min 0
+max.draw LINE2
+max.colour 999999
+max.info Maximum number of keys allowed (opcache.max_accelerated_files)
 EOF
 }
 
@@ -161,10 +216,17 @@ do_memory_values() {
     local wasted_perc=$(parse_nested_json "$json" "memory_usage" "current_wasted_percentage")
     local total_mem=$((used_mem + free_mem + wasted_mem))
     
+    # Bereken used percentage
+    local used_perc=0
+    if [ "$total_mem" -gt 0 ]; then
+        used_perc=$((used_mem * 100 / total_mem))
+    fi
+    
     echo "used.value ${used_mem}"
     echo "free.value ${free_mem}"
     echo "wasted.value ${wasted_mem}"
     echo "total.value ${total_mem}"
+    echo "used_perc.value ${used_perc}"
     echo "wasted_perc.value ${wasted_perc}"
 }
 
