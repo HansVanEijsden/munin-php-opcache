@@ -49,22 +49,15 @@ parse_nested_json() {
 do_memory_config() {
     local json=$(get_opcache_stats)
     
-    # Bereken total memory
+    # Bereken total memory (voor de weergave)
     local used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
     local free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
     local wasted_mem=$(parse_nested_json "$json" "memory_usage" "wasted_memory")
     local total_memory=$((used_mem + free_mem + wasted_mem))
     
-    # Gebruik total memory of default 256MB
     if [ "$total_memory" -eq 0 ]; then
         total_memory=268435456
     fi
-    
-    # Bereken thresholds in bytes (10MB = 10485760, 5MB = 5242880)
-    local warn_bytes=10485760   # 10MB
-    local crit_bytes=5242880    # 5MB
-    local warn_wasted=10485760  # 10MB
-    local crit_wasted=52428800  # 50MB
     
     cat <<EOF
 graph_title PHP OPcache memory usage - ${CONTAINER}
@@ -86,18 +79,14 @@ free.type GAUGE
 free.min 0
 free.draw STACK
 free.colour 6BAED6
-free.warning ${warn_bytes}:
-free.critical ${crit_bytes}:
-free.info Available OPcache memory (warning if below 10MB, critical if below 5MB)
+free.info Available OPcache memory (does not include wasted)
 
 wasted.label Wasted memory
 wasted.type GAUGE
 wasted.min 0
 wasted.draw STACK
 wasted.colour DD4B39
-wasted.warning :${warn_wasted}
-wasted.critical :${crit_wasted}
-wasted.info Memory wasted due to fragmentation (warning if above 10MB, critical if above 50MB)
+wasted.info Memory from outdated scripts (will be reclaimed automatically when needed)
 
 total.label Total memory
 total.type GAUGE
@@ -105,46 +94,15 @@ total.min 0
 total.draw LINE2
 total.colour 999999
 total.info Total OPcache memory available
-EOF
-}
 
-do_keys_config() {
-    local json=$(get_opcache_stats)
-    local max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
-    
-    # Default waarde als niet gevonden
-    if [ "$max_keys" -eq 0 ]; then
-        max_keys=16229
-    fi
-    
-    cat <<EOF
-graph_title PHP OPcache keys usage - ${CONTAINER}
-graph_args -l 0
-graph_vlabel keys
-graph_category php-opcache
-graph_info OPcache keys usage for ${CONTAINER}
-graph_order cached free max
-
-cached.label Cached keys
-cached.type GAUGE
-cached.min 0
-cached.draw AREA
-cached.colour 44AD4E
-cached.info Number of currently cached keys
-
-free.label Free slots
-free.type GAUGE
-free.min 0
-free.draw STACK
-free.colour 6BAED6
-free.info Available key slots (max - cached)
-
-max.label Max keys (total)
-max.type GAUGE
-max.min 0
-max.draw LINE2
-max.colour 999999
-max.info Maximum number of keys allowed (opcache.max_accelerated_files)
+# Dit is de crux - de echte health indicator
+wasted_perc.label Wasted percentage
+wasted_perc.type GAUGE
+wasted_perc.min 0
+wasted_perc.max 100
+wasted_perc.warning 5
+wasted_perc.critical 10
+wasted_perc.info Wasted memory as percentage of total (restarts when above opcache.max_wasted_percentage, default 5)
 EOF
 }
 
@@ -200,12 +158,14 @@ do_memory_values() {
     local used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
     local free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
     local wasted_mem=$(parse_nested_json "$json" "memory_usage" "wasted_memory")
+    local wasted_perc=$(parse_nested_json "$json" "memory_usage" "current_wasted_percentage")
     local total_mem=$((used_mem + free_mem + wasted_mem))
     
     echo "used.value ${used_mem}"
     echo "free.value ${free_mem}"
     echo "wasted.value ${wasted_mem}"
     echo "total.value ${total_mem}"
+    echo "wasted_perc.value ${wasted_perc}"
 }
 
 do_keys_values() {
