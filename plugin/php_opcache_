@@ -1,13 +1,13 @@
 #!/bin/bash
-# Munin plugin voor PHP OPcache stats - per container
-# Versie: 1.2.0 - Aangepaste warnings: used_perc warning=95%, critical=98%
+# Munin plugin for PHP OPcache stats - per container
+# Version: 1.2.0 - Custom warnings: used_perc warning=95%, critical=98%
 
 PLUGIN_NAME="${0##*/}"
 CONTAINER="${PLUGIN_NAME#php_opcache_}"
-CONTAINER="${CONTAINER//_/-}"  # Zet underscores terug naar streepjes
+CONTAINER="${CONTAINER//_/-}"  # Convert underscores back to dashes
 SOCKET="/run/php/${CONTAINER}.sock"
 
-# Veilige naam voor Munin (streepjes -> underscores)
+# Munin-safe name (dashes -> underscores)
 SAFE_NAME="${CONTAINER//-/_}"
 
 get_opcache_stats() {
@@ -17,7 +17,7 @@ get_opcache_stats() {
     cgi-fcgi -bind -connect "$SOCKET" 2>&1 | tail -1
 }
 
-# Helper functie voor JSON parsing
+# Helper function for JSON parsing
 parse_json() {
     local json="$1"
     local key="$2"
@@ -25,13 +25,13 @@ parse_json() {
     if command -v jq >/dev/null 2>&1; then
         echo "$json" | jq -r "$key // 0"
     else
-        # Fallback naar grep/sed
+        # Fallback to grep/sed
         local value=$(echo "$json" | grep -o "\"${key}\":[0-9]*" | head -1 | cut -d':' -f2)
         echo "${value:-0}"
     fi
 }
 
-# Helper functie voor nested JSON parsing
+# Helper function for nested JSON parsing
 parse_nested_json() {
     local json="$1"
     local parent="$2"
@@ -40,7 +40,7 @@ parse_nested_json() {
     if command -v jq >/dev/null 2>&1; then
         echo "$json" | jq -r ".${parent}.${child} // 0"
     else
-        # Fallback naar grep/sed voor nested values
+        # Fallback to grep/sed for nested values
         local value=$(echo "$json" | grep -o "\"${child}\":[0-9]*" | head -1 | cut -d':' -f2)
         echo "${value:-0}"
     fi
@@ -49,7 +49,7 @@ parse_nested_json() {
 do_memory_config() {
     local json=$(get_opcache_stats)
     
-    # Bereken total memory
+    # Calculate total memory
     local used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
     local free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
     local wasted_mem=$(parse_nested_json "$json" "memory_usage" "wasted_memory")
@@ -59,11 +59,11 @@ do_memory_config() {
         total_memory=268435456
     fi
     
-    # Bereken thresholds voor echte problemen
-    local free_critical=$((total_memory * 1 / 100))  # 1% van total is echt kritiek
-    local wasted_critical=30  # 30% is onhoudbaar
+    # Calculate thresholds for real problems
+    local free_critical=$((total_memory * 1 / 100))  # 1% of total is truly critical
+    local wasted_critical=30  # 30% is untenable
     
-    # Jouw gewenste warnings voor used percentage
+    # Your desired warnings for the used percentage
     local used_warning=95
     local used_critical=98
     
@@ -125,7 +125,7 @@ do_keys_config() {
     local json=$(get_opcache_stats)
     local max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
     
-    # Default waarde als niet gevonden
+    # Default value if not found
     if [ "$max_keys" -eq 0 ]; then
         max_keys=16229
     fi
@@ -165,12 +165,12 @@ do_interned_strings_config() {
     local json=$(get_opcache_stats)
     local buffer_size=$(parse_nested_json "$json" "interned_strings_usage" "buffer_size")
     
-    # Default waarde als niet gevonden (32MB)
+    # Default value if not found (32MB)
     if [ "$buffer_size" -eq 0 ]; then
         buffer_size=33554432
     fi
     
-    # Bereken thresholds in bytes (10% en 5% van buffer_size)
+    # Calculate thresholds in bytes (10% and 5% of buffer_size)
     local warn_bytes=$((buffer_size * 10 / 100))
     local crit_bytes=$((buffer_size * 5 / 100))
     
@@ -216,7 +216,7 @@ do_memory_values() {
     local wasted_perc=$(parse_nested_json "$json" "memory_usage" "current_wasted_percentage")
     local total_mem=$((used_mem + free_mem + wasted_mem))
     
-    # Bereken used percentage
+    # Calculate used percentage
     local used_perc=0
     if [ "$total_mem" -gt 0 ]; then
         used_perc=$((used_mem * 100 / total_mem))
@@ -236,7 +236,7 @@ do_keys_values() {
     local max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
     local cached_keys=$(parse_nested_json "$json" "opcache_statistics" "num_cached_keys")
     
-    # Default waarden als niet gevonden
+    # Default values if not found
     [ "$max_keys" -eq 0 ] && max_keys=16229
     
     local free_keys=$((max_keys - cached_keys))
@@ -253,10 +253,10 @@ do_interned_strings_values() {
     local used_mem=$(parse_nested_json "$json" "interned_strings_usage" "used_memory")
     local free_mem=$(parse_nested_json "$json" "interned_strings_usage" "free_memory")
     
-    # Als buffer_size 0 is, gebruik dan default 32MB
+    # If buffer_size is 0, use the 32MB default
     if [ "$buffer_size" -eq 0 ]; then
         buffer_size=33554432
-        # Als we geen data hebben, probeer dan used+free te gebruiken
+        # If we have no data, try using used+free
         if [ "$used_mem" -eq 0 ] && [ "$free_mem" -eq 0 ]; then
             used_mem=0
             free_mem=$buffer_size

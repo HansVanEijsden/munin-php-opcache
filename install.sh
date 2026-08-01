@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installatie script voor Munin PHP OPcache plugin
+# Installation script for the Munin PHP OPcache plugin
 # Location: /usr/local/src/munin-php-opcache/install.sh
 
 set -e
