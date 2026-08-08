@@ -61,10 +61,9 @@ php_containers() {
 }
 
 do_memory_config() {
-    local container="$1" json
+    local container="$1" json="$2"
     local safe_name used_mem free_mem wasted_mem total_memory free_critical wasted_critical used_warning used_critical
     safe_name=$(safe "$container")
-    json=$(get_opcache_stats "$container")
 
     used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
     free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
@@ -138,10 +137,9 @@ EOF
 }
 
 do_keys_config() {
-    local container="$1" json
+    local container="$1" json="$2"
     local safe_name max_keys
     safe_name=$(safe "$container")
-    json=$(get_opcache_stats "$container")
     max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
     if [ "$max_keys" -eq 0 ]; then
         max_keys=16229
@@ -180,10 +178,9 @@ EOF
 }
 
 do_interned_strings_config() {
-    local container="$1" json
+    local container="$1" json="$2"
     local safe_name buffer_size warn_bytes crit_bytes
     safe_name=$(safe "$container")
-    json=$(get_opcache_stats "$container")
     buffer_size=$(parse_nested_json "$json" "interned_strings_usage" "buffer_size")
     if [ "$buffer_size" -eq 0 ]; then
         buffer_size=33554432
@@ -226,10 +223,9 @@ EOF
 }
 
 do_memory_values() {
-    local container="$1" json
+    local container="$1" json="$2"
     local safe_name used_mem free_mem wasted_mem wasted_perc total_mem used_perc
     safe_name=$(safe "$container")
-    json=$(get_opcache_stats "$container")
 
     used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
     free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
@@ -252,10 +248,9 @@ do_memory_values() {
 }
 
 do_keys_values() {
-    local container="$1" json
+    local container="$1" json="$2"
     local safe_name max_keys cached_keys free_keys
     safe_name=$(safe "$container")
-    json=$(get_opcache_stats "$container")
 
     max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
     cached_keys=$(parse_nested_json "$json" "opcache_statistics" "num_cached_keys")
@@ -269,10 +264,9 @@ do_keys_values() {
 }
 
 do_interned_strings_values() {
-    local container="$1" json
+    local container="$1" json="$2"
     local safe_name buffer_size used_mem free_mem
     safe_name=$(safe "$container")
-    json=$(get_opcache_stats "$container")
 
     buffer_size=$(parse_nested_json "$json" "interned_strings_usage" "buffer_size")
     used_mem=$(parse_nested_json "$json" "interned_strings_usage" "used_memory")
@@ -295,21 +289,23 @@ do_interned_strings_values() {
 case "$1" in
     config)
         for c in $(php_containers); do
-            do_memory_config "$c"
+            json=$(get_opcache_stats "$c")
+            do_memory_config "$c" "$json"
             echo
-            do_keys_config "$c"
+            do_keys_config "$c" "$json"
             echo
-            do_interned_strings_config "$c"
+            do_interned_strings_config "$c" "$json"
             echo
         done
         ;;
     *)
         for c in $(php_containers); do
-            do_memory_values "$c"
+            json=$(get_opcache_stats "$c")
+            do_memory_values "$c" "$json"
             echo
-            do_keys_values "$c"
+            do_keys_values "$c" "$json"
             echo
-            do_interned_strings_values "$c"
+            do_interned_strings_values "$c" "$json"
             echo
         done
         ;;
