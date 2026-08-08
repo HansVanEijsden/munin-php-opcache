@@ -1,6 +1,8 @@
 #!/bin/bash
 # Munin plugin for PHP OPcache stats - ALL containers in a single process (multigraph)
-# Version: 2.0.0 - single-process auto-discovering replacement for the
+# Version: 2.0.1 - fix interned-strings values using memory_usage instead of
+# interned_strings_usage (showed full OPcache memory on the interned graph).
+# 2.0.0 - single-process auto-discovering replacement for the
 # per-container php_opcache_<container> wildcard plugin.
 #
 # Emits per container (identical graph names to v1.x, so existing RRDs are
@@ -266,23 +268,23 @@ do_keys_values() {
 
 do_interned_strings_values() {
     local container="$1" json="$2"
-    local safe_name buffer_size used_mem free_mem
-    local wasted_mem wasted_perc max_keys cached_keys iused ifree
+    local safe_name buffer_size iused ifree
+    local used_mem free_mem wasted_mem wasted_perc max_keys cached_keys
     safe_name=$(safe "$container")
 
     IFS=$'\t' read -r used_mem free_mem wasted_mem wasted_perc max_keys cached_keys buffer_size iused ifree <<< "$(parse_all "$json")"
 
     if [ "$buffer_size" -eq 0 ]; then
         buffer_size=33554432
-        if [ "$used_mem" -eq 0 ] && [ "$free_mem" -eq 0 ]; then
-            used_mem=0
-            free_mem=$buffer_size
+        if [ "$iused" -eq 0 ] && [ "$ifree" -eq 0 ]; then
+            iused=0
+            ifree=$buffer_size
         fi
     fi
 
     echo "multigraph php_opcache_interned_strings_${safe_name}"
-    echo "used.value ${used_mem}"
-    echo "free.value ${free_mem}"
+    echo "used.value ${iused}"
+    echo "free.value ${ifree}"
     echo "total.value ${buffer_size}"
 }
 
