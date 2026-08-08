@@ -28,25 +28,27 @@ get_opcache_stats() {
 # Container name -> Munin-safe name (dashes -> underscores)
 safe() { echo "${1//-/_}"; }
 
-parse_json() {
-    local json="$1" key="$2"
+# Parse all fields with ONE jq call (or a grep fallback without jq) and print a
+# tab-separated line:
+#   used_mem free_mem wasted_mem wasted_perc max_keys cached_keys buffer_size
+#   interned_used interned_free
+# A single jq per container keeps subprocess spawns low (~42 ms per jq process).
+parse_all() {
+    local json="$1"
     if command -v jq >/dev/null 2>&1; then
-        echo "$json" | jq -r "$key // 0"
+        echo "$json" | jq -r '[.memory_usage.used_memory, .memory_usage.free_memory, .memory_usage.wasted_memory, .memory_usage.current_wasted_percentage, .opcache_statistics.max_cached_keys, .opcache_statistics.num_cached_keys, .interned_strings_usage.buffer_size, .interned_strings_usage.used_memory, .interned_strings_usage.free_memory] | map(if . == null then 0 else . end) | @tsv'
     else
-        local value
-        value=$(echo "$json" | grep -o "\"${key}\":[0-9]*" | head -1 | cut -d':' -f2)
-        echo "${value:-0}"
-    fi
-}
-
-parse_nested_json() {
-    local json="$1" parent="$2" child="$3"
-    if command -v jq >/dev/null 2>&1; then
-        echo "$json" | jq -r ".${parent}.${child} // 0"
-    else
-        local value
-        value=$(echo "$json" | grep -o "\"${child}\":[0-9]*" | head -1 | cut -d':' -f2)
-        echo "${value:-0}"
+        local used free wasted wp maxk cached ibuf iused ifree
+        used=$(echo "$json" | grep -o '"used_memory":[0-9]*' | head -1 | cut -d':' -f2)
+        free=$(echo "$json" | grep -o '"free_memory":[0-9]*' | head -1 | cut -d':' -f2)
+        wasted=$(echo "$json" | grep -o '"wasted_memory":[0-9]*' | head -1 | cut -d':' -f2)
+        wp=$(echo "$json" | grep -o '"current_wasted_percentage":[0-9]*' | head -1 | cut -d':' -f2)
+        maxk=$(echo "$json" | grep -o '"max_cached_keys":[0-9]*' | head -1 | cut -d':' -f2)
+        cached=$(echo "$json" | grep -o '"num_cached_keys":[0-9]*' | head -1 | cut -d':' -f2)
+        ibuf=$(echo "$json" | grep -o '"buffer_size":[0-9]*' | head -1 | cut -d':' -f2)
+        iused=$(echo "$json" | grep -o '"used_memory":[0-9]*' | tail -1 | cut -d':' -f2)
+        ifree=$(echo "$json" | grep -o '"free_memory":[0-9]*' | tail -1 | cut -d':' -f2)
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "${used:-0}" "${free:-0}" "${wasted:-0}" "${wp:-0}" "${maxk:-0}" "${cached:-0}" "${ibuf:-0}" "${iused:-0}" "${ifree:-0}"
     fi
 }
 
@@ -62,12 +64,11 @@ php_containers() {
 
 do_memory_config() {
     local container="$1" json="$2"
-    local safe_name used_mem free_mem wasted_mem total_memory free_critical wasted_critical used_warning used_critical
+    local safe_name used_mem free_mem wasted_mem wasted_perc max_keys cached_keys buffer_size iused ifree
+    local total_memory free_critical wasted_critical used_warning used_critical
     safe_name=$(safe "$container")
 
-    used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
-    free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
-    wasted_mem=$(parse_nested_json "$json" "memory_usage" "wasted_memory")
+    IFS=$'\t' read -r used_mem free_mem wasted_mem wasted_perc max_keys cached_keys buffer_size iused ifree <<< "$(parse_all "$json")"
     total_memory=$((used_mem + free_mem + wasted_mem))
     if [ "$total_memory" -eq 0 ]; then
         total_memory=268435456
@@ -139,8 +140,9 @@ EOF
 do_keys_config() {
     local container="$1" json="$2"
     local safe_name max_keys
+    local used_mem free_mem wasted_mem wasted_perc cached_keys buffer_size iused ifree
     safe_name=$(safe "$container")
-    max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
+    IFS=$'\t' read -r used_mem free_mem wasted_mem wasted_perc max_keys cached_keys buffer_size iused ifree <<< "$(parse_all "$json")"
     if [ "$max_keys" -eq 0 ]; then
         max_keys=16229
     fi
@@ -180,8 +182,9 @@ EOF
 do_interned_strings_config() {
     local container="$1" json="$2"
     local safe_name buffer_size warn_bytes crit_bytes
+    local used_mem free_mem wasted_mem wasted_perc max_keys cached_keys iused ifree
     safe_name=$(safe "$container")
-    buffer_size=$(parse_nested_json "$json" "interned_strings_usage" "buffer_size")
+    IFS=$'\t' read -r used_mem free_mem wasted_mem wasted_perc max_keys cached_keys buffer_size iused ifree <<< "$(parse_all "$json")"
     if [ "$buffer_size" -eq 0 ]; then
         buffer_size=33554432
     fi
@@ -225,12 +228,10 @@ EOF
 do_memory_values() {
     local container="$1" json="$2"
     local safe_name used_mem free_mem wasted_mem wasted_perc total_mem used_perc
+    local max_keys cached_keys buffer_size iused ifree
     safe_name=$(safe "$container")
 
-    used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
-    free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
-    wasted_mem=$(parse_nested_json "$json" "memory_usage" "wasted_memory")
-    wasted_perc=$(parse_nested_json "$json" "memory_usage" "current_wasted_percentage")
+    IFS=$'\t' read -r used_mem free_mem wasted_mem wasted_perc max_keys cached_keys buffer_size iused ifree <<< "$(parse_all "$json")"
     total_mem=$((used_mem + free_mem + wasted_mem))
 
     used_perc=0
@@ -250,10 +251,10 @@ do_memory_values() {
 do_keys_values() {
     local container="$1" json="$2"
     local safe_name max_keys cached_keys free_keys
+    local used_mem free_mem wasted_mem wasted_perc buffer_size iused ifree
     safe_name=$(safe "$container")
 
-    max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
-    cached_keys=$(parse_nested_json "$json" "opcache_statistics" "num_cached_keys")
+    IFS=$'\t' read -r used_mem free_mem wasted_mem wasted_perc max_keys cached_keys buffer_size iused ifree <<< "$(parse_all "$json")"
     [ "$max_keys" -eq 0 ] && max_keys=16229
     free_keys=$((max_keys - cached_keys))
 
@@ -266,11 +267,10 @@ do_keys_values() {
 do_interned_strings_values() {
     local container="$1" json="$2"
     local safe_name buffer_size used_mem free_mem
+    local wasted_mem wasted_perc max_keys cached_keys iused ifree
     safe_name=$(safe "$container")
 
-    buffer_size=$(parse_nested_json "$json" "interned_strings_usage" "buffer_size")
-    used_mem=$(parse_nested_json "$json" "interned_strings_usage" "used_memory")
-    free_mem=$(parse_nested_json "$json" "interned_strings_usage" "free_memory")
+    IFS=$'\t' read -r used_mem free_mem wasted_mem wasted_perc max_keys cached_keys buffer_size iused ifree <<< "$(parse_all "$json")"
 
     if [ "$buffer_size" -eq 0 ]; then
         buffer_size=33554432
