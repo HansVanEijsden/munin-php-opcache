@@ -1,0 +1,316 @@
+#!/bin/bash
+# Munin plugin for PHP OPcache stats - ALL containers in a single process (multigraph)
+# Version: 2.0.0 - single-process auto-discovering replacement for the
+# per-container php_opcache_<container> wildcard plugin.
+#
+# Emits per container (identical graph names to v1.x, so existing RRDs are
+# preserved):
+#   php_opcache_memory_<safe_name>
+#   php_opcache_keys_<safe_name>
+#   php_opcache_interned_strings_<safe_name>
+#
+# Why this exists: v1.x spawned one plugin process per container and each one
+# called cgi-fcgi three times per fetch (plus docker ps + jq per field). With
+# ~30 containers that was ~96 PHP-FPM socket hits + ~100 subprocess spawns per
+# poll. This version does a single `docker ps`, one `cgi-fcgi` per container
+# and minimal JSON parsing, cutting Munin's CPU/process/IO load dramatically.
+
+PLUGIN_NAME="${0##*/}"
+
+get_opcache_stats() {
+    local container="$1"
+    SCRIPT_NAME=/tmp/opcache-status.php \
+    SCRIPT_FILENAME=/tmp/opcache-status.php \
+    REQUEST_METHOD=GET \
+    cgi-fcgi -bind -connect "/run/php/${container}.sock" 2>&1 | tail -1
+}
+
+# Container name -> Munin-safe name (dashes -> underscores)
+safe() { echo "${1//-/_}"; }
+
+parse_json() {
+    local json="$1" key="$2"
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r "$key // 0"
+    else
+        local value
+        value=$(echo "$json" | grep -o "\"${key}\":[0-9]*" | head -1 | cut -d':' -f2)
+        echo "${value:-0}"
+    fi
+}
+
+parse_nested_json() {
+    local json="$1" parent="$2" child="$3"
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r ".${parent}.${child} // 0"
+    else
+        local value
+        value=$(echo "$json" | grep -o "\"${child}\":[0-9]*" | head -1 | cut -d':' -f2)
+        echo "${value:-0}"
+    fi
+}
+
+# Discover running containers that expose a PHP-FPM FastCGI socket
+php_containers() {
+    local c
+    for c in $(docker ps --format '{{.Names}}' 2>/dev/null); do
+        if [ -S "/run/php/${c}.sock" ]; then
+            echo "$c"
+        fi
+    done
+}
+
+do_memory_config() {
+    local container="$1" json
+    local safe_name used_mem free_mem wasted_mem total_memory free_critical wasted_critical used_warning used_critical
+    safe_name=$(safe "$container")
+    json=$(get_opcache_stats "$container")
+
+    used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
+    free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
+    wasted_mem=$(parse_nested_json "$json" "memory_usage" "wasted_memory")
+    total_memory=$((used_mem + free_mem + wasted_mem))
+    if [ "$total_memory" -eq 0 ]; then
+        total_memory=268435456
+    fi
+
+    # Thresholds for real problems
+    free_critical=$((total_memory * 1 / 100))   # 1% of total is truly critical
+    wasted_critical=30                           # 30% is untenable
+
+    # Desired warnings for the used percentage
+    used_warning=95
+    used_critical=98
+
+    cat <<EOF
+multigraph php_opcache_memory_${safe_name}
+graph_title PHP OPcache memory usage - ${container}
+graph_args --base 1024 -l 0
+graph_vlabel bytes
+graph_category php-opcache
+graph_info OPcache memory usage for ${container}
+graph_order used free wasted total used_perc wasted_perc
+
+used.label Used memory
+used.type GAUGE
+used.min 0
+used.draw AREA
+used.colour 44AD4E
+used.info Currently used OPcache memory
+
+free.label Free memory
+free.type GAUGE
+free.min 0
+free.draw STACK
+free.colour 6BAED6
+free.critical ${free_critical}:
+free.info Available OPcache memory (CRITICAL if below 1% of total)
+
+wasted.label Wasted memory
+wasted.type GAUGE
+wasted.min 0
+wasted.draw STACK
+wasted.colour DD4B39
+wasted.info Memory from outdated scripts (reclaimed automatically when needed)
+
+total.label Total memory
+total.type GAUGE
+total.min 0
+total.draw LINE2
+total.colour 999999
+total.info Total OPcache memory available
+
+used_perc.label Used percentage
+used_perc.type GAUGE
+used_perc.min 0
+used_perc.max 100
+used_perc.warning ${used_warning}
+used_perc.critical ${used_critical}
+used_perc.info Percentage of total memory used (WARNING if >${used_warning}%%, CRITICAL if >${used_critical}%%)
+
+wasted_perc.label Wasted percentage
+wasted_perc.type GAUGE
+wasted_perc.min 0
+wasted_perc.max 100
+wasted_perc.critical ${wasted_critical}
+wasted_perc.info Wasted memory as percentage (CRITICAL only if >${wasted_critical}%% - manual intervention needed)
+EOF
+}
+
+do_keys_config() {
+    local container="$1" json
+    local safe_name max_keys
+    safe_name=$(safe "$container")
+    json=$(get_opcache_stats "$container")
+    max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
+    if [ "$max_keys" -eq 0 ]; then
+        max_keys=16229
+    fi
+
+    cat <<EOF
+multigraph php_opcache_keys_${safe_name}
+graph_title PHP OPcache keys usage - ${container}
+graph_args -l 0
+graph_vlabel keys
+graph_category php-opcache
+graph_info OPcache keys usage for ${container}
+graph_order cached free max
+
+cached.label Cached keys
+cached.type GAUGE
+cached.min 0
+cached.draw AREA
+cached.colour 44AD4E
+cached.info Number of currently cached keys
+
+free.label Free slots
+free.type GAUGE
+free.min 0
+free.draw STACK
+free.colour 6BAED6
+free.info Available key slots (max - cached)
+
+max.label Max keys (total)
+max.type GAUGE
+max.min 0
+max.draw LINE2
+max.colour 999999
+max.info Maximum number of keys allowed (opcache.max_accelerated_files)
+EOF
+}
+
+do_interned_strings_config() {
+    local container="$1" json
+    local safe_name buffer_size warn_bytes crit_bytes
+    safe_name=$(safe "$container")
+    json=$(get_opcache_stats "$container")
+    buffer_size=$(parse_nested_json "$json" "interned_strings_usage" "buffer_size")
+    if [ "$buffer_size" -eq 0 ]; then
+        buffer_size=33554432
+    fi
+    warn_bytes=$((buffer_size * 10 / 100))
+    crit_bytes=$((buffer_size * 5 / 100))
+
+    cat <<EOF
+multigraph php_opcache_interned_strings_${safe_name}
+graph_title PHP OPcache interned strings - ${container}
+graph_args --base 1024 -l 0
+graph_vlabel bytes
+graph_category php-opcache
+graph_info OPcache interned strings buffer for ${container}. Shows when buffer is nearly full.
+graph_order used free total
+
+used.label Used memory
+used.type GAUGE
+used.min 0
+used.draw AREA
+used.colour 44AD4E
+used.info Currently used interned strings memory
+
+free.label Free memory
+free.type GAUGE
+free.min 0
+free.draw STACK
+free.colour 6BAED6
+free.warning ${warn_bytes}:
+free.critical ${crit_bytes}:
+free.info Available interned strings memory (warning if below 10%, critical if below 5%)
+
+total.label Total buffer size
+total.type GAUGE
+total.min 0
+total.draw LINE2
+total.colour 999999
+total.info Total interned strings buffer size (opcache.interned_strings_buffer)
+EOF
+}
+
+do_memory_values() {
+    local container="$1" json
+    local safe_name used_mem free_mem wasted_mem wasted_perc total_mem used_perc
+    safe_name=$(safe "$container")
+    json=$(get_opcache_stats "$container")
+
+    used_mem=$(parse_nested_json "$json" "memory_usage" "used_memory")
+    free_mem=$(parse_nested_json "$json" "memory_usage" "free_memory")
+    wasted_mem=$(parse_nested_json "$json" "memory_usage" "wasted_memory")
+    wasted_perc=$(parse_nested_json "$json" "memory_usage" "current_wasted_percentage")
+    total_mem=$((used_mem + free_mem + wasted_mem))
+
+    used_perc=0
+    if [ "$total_mem" -gt 0 ]; then
+        used_perc=$((used_mem * 100 / total_mem))
+    fi
+
+    echo "multigraph php_opcache_memory_${safe_name}"
+    echo "used.value ${used_mem}"
+    echo "free.value ${free_mem}"
+    echo "wasted.value ${wasted_mem}"
+    echo "total.value ${total_mem}"
+    echo "used_perc.value ${used_perc}"
+    echo "wasted_perc.value ${wasted_perc}"
+}
+
+do_keys_values() {
+    local container="$1" json
+    local safe_name max_keys cached_keys free_keys
+    safe_name=$(safe "$container")
+    json=$(get_opcache_stats "$container")
+
+    max_keys=$(parse_nested_json "$json" "opcache_statistics" "max_cached_keys")
+    cached_keys=$(parse_nested_json "$json" "opcache_statistics" "num_cached_keys")
+    [ "$max_keys" -eq 0 ] && max_keys=16229
+    free_keys=$((max_keys - cached_keys))
+
+    echo "multigraph php_opcache_keys_${safe_name}"
+    echo "cached.value ${cached_keys}"
+    echo "free.value ${free_keys}"
+    echo "max.value ${max_keys}"
+}
+
+do_interned_strings_values() {
+    local container="$1" json
+    local safe_name buffer_size used_mem free_mem
+    safe_name=$(safe "$container")
+    json=$(get_opcache_stats "$container")
+
+    buffer_size=$(parse_nested_json "$json" "interned_strings_usage" "buffer_size")
+    used_mem=$(parse_nested_json "$json" "interned_strings_usage" "used_memory")
+    free_mem=$(parse_nested_json "$json" "interned_strings_usage" "free_memory")
+
+    if [ "$buffer_size" -eq 0 ]; then
+        buffer_size=33554432
+        if [ "$used_mem" -eq 0 ] && [ "$free_mem" -eq 0 ]; then
+            used_mem=0
+            free_mem=$buffer_size
+        fi
+    fi
+
+    echo "multigraph php_opcache_interned_strings_${safe_name}"
+    echo "used.value ${used_mem}"
+    echo "free.value ${free_mem}"
+    echo "total.value ${buffer_size}"
+}
+
+case "$1" in
+    config)
+        for c in $(php_containers); do
+            do_memory_config "$c"
+            echo
+            do_keys_config "$c"
+            echo
+            do_interned_strings_config "$c"
+            echo
+        done
+        ;;
+    *)
+        for c in $(php_containers); do
+            do_memory_values "$c"
+            echo
+            do_keys_values "$c"
+            echo
+            do_interned_strings_values "$c"
+            echo
+        done
+        ;;
+esac

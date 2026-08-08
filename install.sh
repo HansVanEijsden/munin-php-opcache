@@ -5,7 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLUGIN_SOURCE="${SCRIPT_DIR}/plugin/php_opcache_"
+PLUGIN_SOURCE="${SCRIPT_DIR}/plugin/php_opcache_multi"
 MUNIN_PLUGIN_DIR="/usr/share/munin/plugins"
 
 echo "Installing Munin PHP OPcache plugin from ${SCRIPT_DIR}..."
@@ -33,22 +33,17 @@ if ! command -v jq >/dev/null 2>&1; then
     echo "Install jq for better performance: apt-get install jq"
 fi
 
-# Copy plugin to Munin directory
+# Copy the single auto-discovering multi plugin to the Munin directory
 cp "$PLUGIN_SOURCE" "$MUNIN_PLUGIN_DIR/"
-chmod +x "${MUNIN_PLUGIN_DIR}/php_opcache_"
+chmod +x "${MUNIN_PLUGIN_DIR}/php_opcache_multi"
 
-# Remove old symlinks
+# Remove the legacy per-container wildcard plugin + symlinks (v1.x layout)
 rm -f /etc/munin/plugins/php_opcache_*
+rm -f /usr/share/munin/plugins/php_opcache_
 
-# Create symlinks for each PHP container
-if docker ps --format "{{.Names}}" | grep -q -E 'php$'; then
-    for container in $(docker ps --format "{{.Names}}" | grep -E 'php$'); do
-        echo "Creating symlink for container: $container"
-        ln -sf "${MUNIN_PLUGIN_DIR}/php_opcache_" "/etc/munin/plugins/php_opcache_${container}"
-    done
-else
-    echo "Warning: No PHP containers found running"
-fi
+# Create the single plugin symlink. Containers are auto-discovered via
+# `docker ps` + FastCGI socket presence, so no per-container symlinks needed.
+ln -sf "${MUNIN_PLUGIN_DIR}/php_opcache_multi" "/etc/munin/plugins/php_opcache_multi"
 
 # Restart munin-node
 systemctl restart munin-node
@@ -57,9 +52,8 @@ echo ""
 echo "Installation complete!"
 echo ""
 echo "Test with:"
-for container in $(docker ps --format "{{.Names}}" | grep -E 'php$'); do
-    echo "  munin-run php_opcache_${container} config | head -5"
-done
+echo "  munin-run php_opcache_multi config | head -15"
+echo "  munin-run php_opcache_multi | head -15"
 echo ""
 echo "Note: Install jq for better JSON parsing performance:"
 echo "  apt-get install jq"

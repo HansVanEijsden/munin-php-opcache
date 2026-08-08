@@ -6,10 +6,11 @@ set -e
 
 echo "Removing Munin PHP OPcache plugin..."
 
-# Remove symlinks
+# Remove plugin symlinks (multi + any legacy per-container ones)
 rm -f /etc/munin/plugins/php_opcache_*
 
-# Remove plugin
+# Remove plugins (multi + legacy wildcard)
+rm -f /usr/share/munin/plugins/php_opcache_multi
 rm -f /usr/share/munin/plugins/php_opcache_
 
 # Restart munin-node

@@ -13,13 +13,9 @@ update:
 	sudo bash install.sh
 
 test:
-	@echo "Testing plugin..."
-	@for container in $$(docker ps --format "{{.Names}}" | grep -E 'php$$'); do \
-		echo "=== Testing $$container ==="; \
-		sudo munin-run php_opcache_$$container config | head -5; \
-		sudo munin-run php_opcache_$$container | head -5; \
-		echo ""; \
-	done
+	@echo "Testing opcache multi plugin..."
+	@sudo munin-run php_opcache_multi config | head -15
+	@sudo munin-run php_opcache_multi | head -15
 
 clean:
 	git clean -fdX
