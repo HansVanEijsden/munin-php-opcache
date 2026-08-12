@@ -1,6 +1,9 @@
 #!/bin/bash
 # Munin plugin for PHP OPcache stats - ALL containers in a single process (multigraph)
-# Version: 2.0.1 - fix interned-strings values using memory_usage instead of
+# Version: 2.0.2 - drop the free-memory critical alert: low free memory is the
+# normal operating point of a full OPcache and is not actionable (OPcache
+# auto-restarts when wasted > max_wasted_percentage).
+# 2.0.1 - fix interned-strings values using memory_usage instead of
 # interned_strings_usage (showed full OPcache memory on the interned graph).
 # 2.0.0 - single-process auto-discovering replacement for the
 # per-container php_opcache_<container> wildcard plugin.
@@ -16,8 +19,6 @@
 # ~30 containers that was ~96 PHP-FPM socket hits + ~100 subprocess spawns per
 # poll. This version does a single `docker ps`, one `cgi-fcgi` per container
 # and minimal JSON parsing, cutting Munin's CPU/process/IO load dramatically.
-
-PLUGIN_NAME="${0##*/}"
 
 get_opcache_stats() {
     local container="$1"
@@ -67,7 +68,7 @@ php_containers() {
 do_memory_config() {
     local container="$1" json="$2"
     local safe_name used_mem free_mem wasted_mem wasted_perc max_keys cached_keys buffer_size iused ifree
-    local total_memory free_critical wasted_critical used_warning used_critical
+    local total_memory wasted_critical used_warning used_critical
     safe_name=$(safe "$container")
 
     IFS=$'\t' read -r used_mem free_mem wasted_mem wasted_perc max_keys cached_keys buffer_size iused ifree <<< "$(parse_all "$json")"
@@ -76,8 +77,10 @@ do_memory_config() {
         total_memory=268435456
     fi
 
-    # Thresholds for real problems
-    free_critical=$((total_memory * 1 / 100))   # 1% of total is truly critical
+    # Only wasted memory is actionable (it stays high when OPcache is NOT
+    # reclaiming outdated scripts). Low free memory is normal: OPcache keeps
+    # memory ~full and auto-restarts when wasted > max_wasted_percentage, so
+    # free memory deliberately has NO alert threshold.
     wasted_critical=30                           # 30% is untenable
 
     # Desired warnings for the used percentage
@@ -105,8 +108,7 @@ free.type GAUGE
 free.min 0
 free.draw STACK
 free.colour 6BAED6
-free.critical ${free_critical}:
-free.info Available OPcache memory (CRITICAL if below 1% of total)
+free.info Available OPcache memory (no alert threshold: low free memory is normal for a full OPcache)
 
 wasted.label Wasted memory
 wasted.type GAUGE
