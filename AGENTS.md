@@ -27,6 +27,40 @@ munin-run php_opcache_multi | head -15
 
 These require a running container using the custom PHP image and a live `/run/php/<container>.sock` socket. See [README.md](README.md) for install prerequisites.
 
+**Local verification without a live socket** (the dev Mac has no container socket):
+- Always `bash -n plugin/php_opcache_multi` after editing.
+- To inspect the emitted `config`/values without Docker, extract the functions (everything before `case "$1" in`) and call them with a fake OPcache JSON:
+  ```bash
+  awk '/^case "\$1" in/{exit} {print}' plugin/php_opcache_multi > /tmp/f.sh
+  source /tmp/f.sh
+  json='{"memory_usage":{"used_memory":211000000,"free_memory":820760,"wasted_memory":56600000,"current_wasted_percentage":20.52},"opcache_statistics":{"max_cached_keys":16229,"num_cached_keys":15000},"interned_strings_usage":{"buffer_size":33554432,"used_memory":31000000,"free_memory":2554432}}'
+  do_memory_config my-container "$json"
+  ```
+- Gotcha: stubbing `docker`/`cgi-fcgi` on PATH is not enough — `php_containers()` also checks `-S /run/php/<name>.sock`, which fails on a dev Mac and silently yields empty output.
+
+## Deployment
+
+The plugin runs on three production hosts; every change ships the same way. Commit + push to `main` first — the hosts pull from GitHub.
+
+| Host | SSH alias | Clone path |
+| --- | --- | --- |
+| cloud.hansvaneijsden.nl | `HansVanEijsden` | `/usr/local/src/munin-php-opcache` |
+| cloud.rtv1ijsseldelta.nl | `RTV1IJsseldelta` | `/usr/local/src/munin-php-opcache` |
+| cloud.sykam.com | `Sykam` | `/usr/local/src/munin-php-opcache` |
+
+Per host (as root over SSH — no `sudo` needed):
+
+```bash
+ssh -o BatchMode=yes <alias> 'cd /usr/local/src/munin-php-opcache && git pull --ff-only origin main && bash install.sh'
+```
+
+`install.sh` copies the plugin to `/usr/share/munin/plugins/`, re-creates the symlink and restarts `munin-node`. After deploy, verify installed == repo and the live config has no regressions:
+
+```bash
+md5sum /usr/share/munin/plugins/php_opcache_multi /usr/local/src/munin-php-opcache/plugin/php_opcache_multi
+munin-run php_opcache_multi config   # spot-check fields
+```
+
 ## Architecture
 
 - `plugin/php_opcache_multi` — the only plugin source file. Munin invokes it via a single symlink `/etc/munin/plugins/php_opcache_multi`.
@@ -35,6 +69,7 @@ These require a running container using the custom PHP image and a live `/run/ph
 - Stats come from a FastCGI endpoint in a custom PHP Docker image (<https://github.com/HansVanEijsden/php-wordpress-base>) via `cgi-fcgi`, **not** from the `php`/`opcache` CLI.
 - JSON parsing prefers `jq`, with a `grep`/`sed` fallback (see `parse_all` — one `jq` call per container, or an inline `grep`/`sed` path when `jq` is absent).
 - The interned-strings graph reads `interned_strings_usage.{used,free}_memory` — v2.0.1 fixed a bug where it read the full OPcache `memory_usage` values instead (graphs showed whole-cache memory).
+- `parse_all` prints a fixed **9-field tab-separated line** (used, free, wasted, wasted %, max keys, cached keys, buffer size, interned used, interned free); every `do_*_config`/`do_*_values` consumer reads fields **by position**. This order is load-bearing — changing field order/count means updating every consumer (the v2.0.0 refactor regressed the interned-strings graph by reading the wrong columns).
 - Graph names are byte-for-byte identical to v1.x, so existing RRDs survive an upgrade.
 
 ### Naming conversions (critical, non-obvious)
