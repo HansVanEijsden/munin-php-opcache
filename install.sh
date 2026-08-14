@@ -29,7 +29,7 @@ fi
 
 # Optional: check jq (not required, but nice to have)
 if ! command -v jq >/dev/null 2>&1; then
-    echo "Warning: jq not found. Will use grep/sed fallback for JSON parsing."
+    echo "Warning: jq not found. Will use grep/cut fallback for JSON parsing."
     echo "Install jq for better performance: apt-get install jq"
 fi
 

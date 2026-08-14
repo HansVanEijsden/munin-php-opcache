@@ -63,11 +63,11 @@ munin-run php_opcache_multi config   # spot-check fields
 
 ## Architecture
 
-- `plugin/php_opcache_multi` — the only plugin source file. Munin invokes it via a single symlink `/etc/munin/plugins/php_opcache_multi`.
+- `plugin/php_opcache_multi` — the only **active** plugin source file (`plugin/php_opcache_` is the legacy v1.x per-container plugin, retained in the repo and removed by `install.sh`/`uninstall.sh`). Munin invokes it via a single symlink `/etc/munin/plugins/php_opcache_multi`.
 - On every poll the plugin lists running containers once (`docker ps`), keeps those exposing `/run/php/<name>.sock`, and queries each socket once via `cgi-fcgi` — a huge reduction in subprocess spawns vs the old one-process-per-container layout.
 - Output is Munin **multigraph**: three graphs per container — `memory`, `keys`, `interned_strings`.
 - Stats come from a FastCGI endpoint in a custom PHP Docker image (<https://github.com/HansVanEijsden/php-wordpress-base>) via `cgi-fcgi`, **not** from the `php`/`opcache` CLI.
-- JSON parsing prefers `jq`, with a `grep`/`sed` fallback (see `parse_all` — one `jq` call per container, or an inline `grep`/`sed` path when `jq` is absent).
+- JSON parsing prefers `jq`, with a `grep`/`cut` fallback (see `parse_all` — one `jq` call per container, or an inline `grep`/`cut` path when `jq` is absent).
 - The interned-strings graph reads `interned_strings_usage.{used,free}_memory` — v2.0.1 fixed a bug where it read the full OPcache `memory_usage` values instead (graphs showed whole-cache memory).
 - `parse_all` prints a fixed **9-field tab-separated line** (used, free, wasted, wasted %, max keys, cached keys, buffer size, interned used, interned free); every `do_*_config`/`do_*_values` consumer reads fields **by position**. This order is load-bearing — changing field order/count means updating every consumer (the v2.0.0 refactor regressed the interned-strings graph by reading the wrong columns).
 - Graph names are byte-for-byte identical to v1.x, so existing RRDs survive an upgrade.
@@ -88,7 +88,7 @@ Symlink layout: `/etc/munin/plugins/php_opcache_multi` → `/usr/share/munin/plu
 - Munin output format: every graph sets `graph_title`, `graph_vlabel`, `graph_category php-opcache`, `graph_order`, and per field `.label`, `.type GAUGE`, `.min`, `.draw`, `.colour`, plus `.warning`/`.critical` where relevant.
 - A `.warning`/`.critical` value with a **trailing colon** means "alert if value is **below** N" — used for free-memory / free-keys thresholds.
 - If stats are unavailable, the plugin falls back to defaults: total memory 256 MiB, max keys 16229, interned-strings buffer 32 MiB.
-- `install.sh` and the plugin discover containers via `docker ps` + FastCGI socket presence (`/run/php/<name>.sock`), not by name suffix.
+- The plugin discovers containers via `docker ps` + FastCGI socket presence (`/run/php/<name>.sock`), not by name suffix; `install.sh` only installs the plugin, removes legacy symlinks, and creates the single symlink.
 
 ## Alerts & thresholds (reading Munin emails)
 

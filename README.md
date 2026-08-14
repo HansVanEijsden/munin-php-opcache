@@ -12,7 +12,7 @@ A [Munin](https://munin-monitoring.org/) plugin that monitors PHP OPcache statis
 - Interned strings buffer usage
 - Automatic container detection (any container exposing `/run/php/<name>.sock`)
 - Single process for all containers (v2.0.0) — one `docker ps`, one FastCGI query per container
-- Pure bash implementation — no PHP CLI dependency (`jq` with `grep`/`sed` fallback)
+- Pure bash implementation — no PHP CLI dependency (`jq` with `grep`/`cut` fallback)
 
 ## Requirements
 

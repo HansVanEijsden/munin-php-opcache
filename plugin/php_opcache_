@@ -25,7 +25,7 @@ parse_json() {
     if command -v jq >/dev/null 2>&1; then
         echo "$json" | jq -r "$key // 0"
     else
-        # Fallback to grep/sed
+        # Fallback to grep/cut
         local value=$(echo "$json" | grep -o "\"${key}\":[0-9]*" | head -1 | cut -d':' -f2)
         echo "${value:-0}"
     fi
@@ -40,7 +40,7 @@ parse_nested_json() {
     if command -v jq >/dev/null 2>&1; then
         echo "$json" | jq -r ".${parent}.${child} // 0"
     else
-        # Fallback to grep/sed for nested values
+        # Fallback to grep/cut for nested values
         local value=$(echo "$json" | grep -o "\"${child}\":[0-9]*" | head -1 | cut -d':' -f2)
         echo "${value:-0}"
     fi
